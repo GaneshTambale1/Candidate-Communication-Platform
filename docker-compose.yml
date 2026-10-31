@@ -1,0 +1,59 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-communications}
+      POSTGRES_USER: ${POSTGRES_USER:-communications}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-localdev_only}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 4s
+      timeout: 3s
+      retries: 20
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 4s
+      timeout: 3s
+      retries: 20
+  backend:
+    build: ./backend
+    env_file: .env
+    command: sh -c "python manage.py migrate --noinput && python manage.py seed_demo && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+  worker:
+    build: ./backend
+    env_file: .env
+    command: celery -A config worker -l info --concurrency=2
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      backend: {condition: service_started}
+  provider:
+    build: ./provider-simulator
+    env_file: .env
+    environment:
+      PROVIDER_DB_PATH: /data/provider.sqlite3
+    ports:
+      - "8001:8001"
+    volumes:
+      - provider_data:/data
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000/api/v1}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+volumes:
+  postgres_data:
+  provider_data:
